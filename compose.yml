@@ -1,0 +1,102 @@
+services:
+  sandbox:
+    image: oxheadalpha/flextesa:latest
+    command: nairobibox start
+    container_name: sandbox
+    environment:
+      - block_time=4
+      - flextesa_node_cors_origin=*
+    ports:
+      - 20000:20000
+    expose:
+      - 20000/tcp
+
+  tzkt-api:
+    container_name: tzkt-api
+    restart: always
+    image: bakingbad/tzkt-api:latest
+    depends_on:
+      - db
+    environment:
+      ConnectionStrings__DefaultConnection: host=db;port=5432;database=${POSTGRES_DB};username=${POSTGRES_USER};password=${POSTGRES_PASSWORD};command timeout=${COMMAND_TIMEOUT:-600};
+      Kestrel__Endpoints__Http__Url: http://0.0.0.0:5000
+    ports:
+      - 0.0.0.0:5000:5000
+
+  tzkt-sync:
+    container_name: tzkt-sync
+    restart: always
+    image: bakingbad/tzkt-sync:latest
+    environment:
+      ConnectionStrings__DefaultConnection: host=db;port=5432;database=${POSTGRES_DB};username=${POSTGRES_USER};password=${POSTGRES_PASSWORD};command timeout=${COMMAND_TIMEOUT:-600};
+      Kestrel__Endpoints__Http__Url: http://0.0.0.0:5001
+      TezosNode__Endpoint: http://sandbox:20000
+    depends_on:
+      - db
+      - sandbox
+    ports:
+      - 0.0.0.0:5001:5001
+
+  dipdup:
+    container_name: dipdup-metadata
+    image: ghcr.io/dipdup-io/metadata:latest
+    build:
+      dockerfile: dipdup/Dockerfile
+      context: .
+    env_file:
+      - .env
+    restart: always
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - ADMIN_SECRET=${HASURA_SECRET}
+      - IPFS_NODE_URI=${IPFS_NODE_URI:-https://ipfs.io}
+    volumes:
+      - ipfs:/etc/metadata/ipfs
+    depends_on:
+      - db
+      - hasura
+      - tzkt-api
+      - tzkt-sync
+      - sandbox
+
+  db:
+    container_name: db
+    image: postgres:15
+    ports:
+      - 5432
+    volumes:
+      - db:/var/lib/postgresql/data
+    restart: always
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  hasura:
+    image: hasura/graphql-engine:latest
+    container_name: hasura
+    ports:
+      - 8080:8080
+    depends_on:
+      - db
+    restart: always
+    env_file: .env
+    environment:
+      - HASURA_GRAPHQL_DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - HASURA_GRAPHQL_ADMIN_SECRET=${HASURA_SECRET}
+      - HASURA_GRAPHQL_ENABLE_CONSOLE=true
+      - HASURA_GRAPHQL_DEV_MODE=true
+      - HASURA_GRAPHQL_LOG_LEVEL=info
+      - HASURA_GRAPHQL_ENABLE_TELEMETRY=false
+      - HASURA_GRAPHQL_UNAUTHORIZED_ROLE=user
+      - HASURA_GRAPHQL_STRINGIFY_NUMERIC_TYPES=true
+
+volumes:
+  db:
+  ipfs:
+  dibdup:
+    driver: local
